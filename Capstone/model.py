@@ -5,53 +5,44 @@ import seaborn as sns
 import os
 
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.feature_selection import SelectKBest, f_classif
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score, ConfusionMatrixDisplay, roc_curve, roc_auc_score
 
-def load_and_prepare_data(filepath="combined_results.csv"):
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"{filepath} does not exist. Please run the data processing script first.")
-    data = pd.read_csv(filepath)
-    data = data.dropna(axis=1, how='any')
-    X = data.drop(columns=["desease_name"])
-    y = data["desease_name"]
+from preprocess import load_mutation_data, load_disease_data
+
+
+def load_and_prepare_data():
+    mutation_data = load_mutation_data()
+    disease_data = load_disease_data()
+
+    mutation_data['disease_name'] = mutation_data['case'].map(disease_data.set_index('case_id')['tumor_code'])
+    mutation_data = mutation_data.dropna(subset=['disease_name'])
+    mutation_data = mutation_data.drop(columns=['case'])
+    X = mutation_data.drop(columns=["disease_name"])
+    X.dropna(axis=1, inplace=True)
+    X = X.drop("worst_class_overall", axis=1, errors='ignore')
+
+    y = mutation_data['disease_name'].astype('category')
     return X, y
 
-def select_features(X_train, y_train, X_test, k=25):
-    selector = SelectKBest(score_func=f_classif, k=k)
-    X_train_selected = selector.fit_transform(X_train, y_train)
-    X_test_selected = selector.transform(X_test)
-    selected_feature_names = X_train.columns[selector.get_support()]
-    return X_train_selected, X_test_selected, selected_feature_names, selector
 
 def train_model(X, y, k=25):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
-    X_train_sel, X_test_sel, feat_names, selector = select_features(X_train, y_train, X_test, k)
-    param_grid = {
-        'n_estimators': [100, 200],
-        'max_depth': [None, 10, 20],
-        'min_samples_split': [2, 5],
-        'min_samples_leaf': [1, 2],
-        'max_features': ['sqrt', 'log2']
-    }
-    grid_search = GridSearchCV(RandomForestClassifier(random_state=42), param_grid, cv=5, n_jobs=-1, scoring='accuracy')
-    grid_search.fit(X_train_sel, y_train)
-    best_rf = grid_search.best_estimator_
+    rf = RandomForestClassifier(random_state=42)
+    rf.fit(X_train, y_train)
     return {
-        "model": best_rf,
-        "X_test_selected": X_test_sel,
+        "model": rf,
+        "X_test_selected": X_test,
         "y_test": y_test,
-        "selected_feature_names": feat_names,
-        "selector": selector,
-        "X_train_selected": X_train_sel,
+        "selected_feature_names": X_train.columns,
+        "selector": None,
+        "X_train_selected": X_train,
         "y_train": y_train,
-        "grid_search": grid_search
+        "grid_search": None
     }
 
 def print_metrics(model, X_test_selected, y_test, grid_search):
     y_pred = model.predict(X_test_selected)
-    print("Best Parameters:", grid_search.best_params_)
     print("Accuracy:", accuracy_score(y_test, y_pred))
     print("\nClassification Report:\n", classification_report(y_test, y_pred))
 

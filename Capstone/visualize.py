@@ -4,35 +4,65 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.colors import LinearSegmentedColormap
 from collections import Counter
+from preprocess import load_mutation_data, load_disease_data
 import os
 
 plt.style.use('fivethirtyeight')
 sns.set(font_scale=1.1)
 
-df = pd.read_csv('combined_results.csv')
-df = df.dropna(axis=1, how='any')
-
-# Replace -1 values with np.nan for better visualization
-df_clean = df.copy()
-for col in df.columns[2:]:
-    df_clean[col] = df_clean[col].replace(-1, np.nan)
-
-# Create a new column: 'group' = 'Healthy' or 'Leukemia'
-df['group'] = df['desease_name'].apply(lambda x: 'Healthy' if x == 'Healthy' else 'Leukemia')
-df_clean['group'] = df['desease_name'].apply(lambda x: 'Healthy' if x == 'Healthy' else 'Leukemia')
+df = load_mutation_data()
+disease_data = load_disease_data()
+df['disease_name'] = df['case'].map(disease_data.set_index('case_id')['tumor_code'])
+df = df.dropna(subset=['disease_name'])
+df = df.drop(columns=['case'])
+df['group'] = df['disease_name']
 
 # Count the number of samples for each group
 group_counts = df['group'].value_counts()
-print(f"Healthy samples: {group_counts.get('Healthy', 0)}")
-print(f"Leukemia samples: {group_counts.get('Leukemia', 0)}")
+print(f"AML samples: {group_counts.get('Acute myeloid leukemia (AML)', 0)}")
+print(f"ALL samples: {group_counts.get('Acute lymphoblastic leukemia (ALL)', 0)}")
 
 if not os.path.exists('visualizations'):
     os.makedirs('visualizations')
 
+# --- UNIFIED GENE-LEVEL (t_alt + n_alt) DATAFRAME ---
+# This block will always create a DataFrame with columns as gene names and values as t_alt + n_alt per sample
+
+def build_gene_alt_df(df, group_col='group'):
+    # If MultiIndex columns (e.g., ('t_alt', 'TP53'))
+    if isinstance(df.columns, pd.MultiIndex):
+        gene_names = sorted({col[1] for col in df.columns if isinstance(col, tuple) and len(col) == 2})
+        gene_alt_cols = {}
+        for gene in gene_names:
+            t_alt = df[('t_alt', gene)].fillna(0) if ('t_alt', gene) in df.columns else 0
+            n_alt = df[('n_alt', gene)].fillna(0) if ('n_alt', gene) in df.columns else 0
+            gene_alt_cols[gene] = t_alt + n_alt
+        gene_alt_df = pd.DataFrame(gene_alt_cols, index=df.index)
+    else:
+        # Flat columns: look for t_alt_{GENE} and n_alt_{GENE}
+        gene_names = sorted(set(col.replace('t_alt_', '').replace('n_alt_', '')
+                               for col in df.columns if col.startswith('t_alt_') or col.startswith('n_alt_')))
+        gene_alt_cols = {}
+        for gene in gene_names:
+            t_alt = df.get(f't_alt_{gene}', 0).fillna(0) if f't_alt_{gene}' in df.columns else 0
+            n_alt = df.get(f'n_alt_{gene}', 0).fillna(0) if f'n_alt_{gene}' in df.columns else 0
+            gene_alt_cols[gene] = t_alt + n_alt
+        gene_alt_df = pd.DataFrame(gene_alt_cols, index=df.index)
+    # Add group column for group-based plots
+    gene_alt_df[group_col] = df[group_col].values
+    return gene_alt_df
+
+# Build the gene_alt_df at the top
+try:
+    gene_alt_df = build_gene_alt_df(df, group_col='group')
+except Exception as e:
+    print('Error building gene_alt_df:', e)
+    gene_alt_df = None
+
 # 1. Group Distribution
 plt.figure(figsize=(8, 5))
 sns.countplot(x='group', data=df)
-plt.title('Distribution of Healthy vs Leukemia in the Dataset', fontsize=16)
+plt.title('Distribution of Healthy vs AML vs ALL in the Dataset', fontsize=16)
 plt.xlabel('Group', fontsize=14)
 plt.ylabel('Count', fontsize=14)
 plt.savefig('visualizations/group_distribution.png', dpi=300, bbox_inches='tight')
@@ -40,15 +70,15 @@ plt.close()
 
 # 2. Chromosomal abnormality heatmap - mean values by group
 chromosome_cols = df.columns[2:43]
-healthy_data = df[df['group'] == 'Healthy'][chromosome_cols]
-leukemia_data = df[df['group'] == 'Leukemia'][chromosome_cols]
+aml_data = df[df['group'] == 'Acute myeloid leukemia (AML)'][chromosome_cols]
+all_data = df[df['group'] == 'Acute lymphoblastic leukemia (ALL)'][chromosome_cols]
 
-healthy_means = healthy_data.mean()
-leukemia_means = leukemia_data.mean()
+aml_means = aml_data.mean()
+all_means = all_data.mean()
 
 heatmap_data = pd.DataFrame({
-    'Healthy': healthy_means,
-    'Leukemia': leukemia_means
+    'AML': aml_means,
+    'ALL': all_means
 })
 
 colors = [(0, 0, 1), (1, 1, 1), (1, 0, 0)]
@@ -69,24 +99,24 @@ plt.close()
 def count_abnormalities(data):
     return (data != 0).sum().sort_values(ascending=False)
 
-healthy_abnormalities = count_abnormalities(healthy_data)
-leukemia_abnormalities = count_abnormalities(leukemia_data)
+aml_abnormalities = count_abnormalities(aml_data)
+all_abnormalities = count_abnormalities(all_data)
 
-healthy_percentages = (healthy_abnormalities / len(healthy_data)) * 100
-leukemia_percentages = (leukemia_abnormalities / len(leukemia_data)) * 100
+aml_percentages = (aml_abnormalities / len(aml_data)) * 100
+all_percentages = (all_abnormalities / len(all_data)) * 100
 
-top_healthy = healthy_percentages.nlargest(15)
-top_leukemia = leukemia_percentages.nlargest(15)
+top_aml = aml_percentages.nlargest(15)
+top_all = all_percentages.nlargest(15)
 
-fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+fig, axes = plt.subplots(1, 2, figsize=(24, 8))
 
-sns.barplot(x=top_healthy.values, y=top_healthy.index, ax=axes[0], color='#2ca02c')
-axes[0].set_title('TOP 15 Chromosome Abnormalities in Healthy', fontsize=14)
+sns.barplot(x=top_aml.values, y=top_aml.index, ax=axes[0], color='#d62728')
+axes[0].set_title('TOP 15 Chromosome Abnormalities in AML', fontsize=14)
 axes[0].set_xlabel('Percentage of Samples (%)', fontsize=12)
-axes[0].set_ylabel('Chromosome Arm', fontsize=12)
+axes[0].set_ylabel('', fontsize=12)
 
-sns.barplot(x=top_leukemia.values, y=top_leukemia.index, ax=axes[1], color='#d62728')
-axes[1].set_title('TOP 15 Chromosome Abnormalities in Leukemia', fontsize=14)
+sns.barplot(x=top_all.values, y=top_all.index, ax=axes[1], color='#1f77b4')
+axes[1].set_title('TOP 15 Chromosome Abnormalities in ALL', fontsize=14)
 axes[1].set_xlabel('Percentage of Samples (%)', fontsize=12)
 axes[1].set_ylabel('', fontsize=12)
 
@@ -96,7 +126,7 @@ plt.close()
 
 # 4. Correlation heatmap of chromosomal abnormalities
 plt.figure(figsize=(16, 14))
-correlation_matrix = df_clean[chromosome_cols].corr()
+correlation_matrix = df[chromosome_cols].corr()
 mask = np.triu(np.ones_like(correlation_matrix, dtype=bool))
 
 sns.heatmap(correlation_matrix, mask=mask, cmap='coolwarm', vmin=-1, vmax=1, 
@@ -143,60 +173,173 @@ plt.grid(axis='y', linestyle='--', alpha=0.7)
 plt.savefig('visualizations/abnormality_count_distribution.png', dpi=300, bbox_inches='tight')
 plt.close()
 
-# 7. Compare specific chromosome abnormalities between groups
-chromosomes_of_interest = ['9q', '13q', '8p', '8q', '17p']
+# Remove karyotype logic and plot
+# Instead, plot mutation burden and top mutated genes
 
-comparison_data = []
-for chrom in chromosomes_of_interest:
-    healthy_pct = (healthy_data[chrom] != 0).mean() * 100
-    leukemia_pct = (leukemia_data[chrom] != 0).mean() * 100
-    comparison_data.append({'Chromosome': chrom, 'Healthy': healthy_pct, 'Leukemia': leukemia_pct})
+def plot_mutation_burden(df, gene_cols, save_path=None, ax=None):
+    mutation_burden = (df[gene_cols] > 0).sum(axis=1)
+    if ax is None:
+        plt.figure(figsize=(10, 6))
+        sns.histplot(mutation_burden, bins=20, kde=True, color='purple')
+        plt.title('Distribution of Mutated Genes per Sample', fontsize=16)
+        plt.xlabel('Number of Mutated Genes', fontsize=14)
+        plt.ylabel('Number of Samples', fontsize=14)
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.close()
+    else:
+        sns.histplot(mutation_burden, bins=20, kde=True, color='purple', ax=ax)
+        ax.set_title('Mutated Genes per Sample')
+        ax.set_xlabel('Number of Mutated Genes')
+        ax.set_ylabel('Number of Samples')
 
-comparison_df = pd.DataFrame(comparison_data)
-comparison_df = pd.melt(comparison_df, id_vars=['Chromosome'], var_name='Group', value_name='Percentage')
 
-plt.figure(figsize=(12, 7))
-sns.barplot(x='Chromosome', y='Percentage', hue='Group', data=comparison_df)
-plt.title('Comparison of Selected Chromosomal Abnormalities Between Healthy and Leukemia', fontsize=16)
-plt.xlabel('Chromosome', fontsize=14)
-plt.ylabel('Percentage of Samples (%)', fontsize=14)
+def plot_top_mutated_genes(df, gene_cols, group_col, group_name, color, save_path=None, ax=None, top_n=10):
+    group_df = df[df[group_col] == group_name]
+    gene_counts = (group_df[gene_cols] > 0).sum(axis=0).sort_values(ascending=False)
+    top_genes = gene_counts.head(top_n)
+    if ax is None:
+        plt.figure(figsize=(10, 6))
+        sns.barplot(x=top_genes.values, y=top_genes.index, color=color)
+        plt.title(f'Top {top_n} Mutated Genes in {group_name}', fontsize=16)
+        plt.xlabel('Number of Samples', fontsize=14)
+        plt.ylabel('Gene', fontsize=14)
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.close()
+    else:
+        sns.barplot(x=top_genes.values, y=top_genes.index, color=color, ax=ax)
+        ax.set_title(f'Top {top_n} Mutated Genes in {group_name}')
+        ax.set_xlabel('Number of Samples')
+        ax.set_ylabel('Gene')
+
+# Identify gene columns (exclude non-gene columns and keep only numeric columns)
+numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+gene_cols = [col for col in numeric_cols if col not in ['abnormality_count', 'mutation_burden']]
+
+# Plot mutation burden
+df['mutation_burden'] = (df[gene_cols] > 0).sum(axis=1)
+plt.figure(figsize=(10, 6))
+sns.histplot(df, x='mutation_burden', hue='group', bins=20, multiple='dodge', kde=True, palette='Set2')
+plt.title('Distribution of Mutated Genes per Sample by Group', fontsize=16)
+plt.xlabel('Number of Mutated Genes', fontsize=14)
+plt.ylabel('Number of Samples', fontsize=14)
 plt.legend(title='Group')
-plt.savefig('visualizations/selected_chromosomes_comparison.png', dpi=300, bbox_inches='tight')
+plt.savefig('visualizations/mutation_burden_by_group.png', dpi=300, bbox_inches='tight')
 plt.close()
 
-# 8. Create a summary visualization
-from matplotlib.gridspec import GridSpec
+# Plot top mutated genes for each group
+for group, color in zip(df['group'].unique(), ['#d62728', '#1f77b4', '#2ca02c', '#ff7f0e']):
+    plot_top_mutated_genes(df, gene_cols, 'group', group, color, save_path=f"visualizations/top_mutated_genes_{group.replace(' ', '_')}.png", top_n=10)
 
-plt.figure(figsize=(18, 14))
+# Utility functions for plotting
+
+def plot_group_distribution(df, save_path=None, ax=None):
+    sns.countplot(x='group', data=df, ax=ax, palette='Set2')
+    if ax is None:
+        plt.title('Distribution of Healthy vs AML vs ALL in the Dataset', fontsize=16)
+        plt.xlabel('Group', fontsize=14)
+        plt.ylabel('Count', fontsize=14)
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.close()
+    else:
+        ax.set_title('Group Distribution', fontsize=14)
+        ax.set_xlabel('Group')
+        ax.set_ylabel('Count')
+
+def plot_abnormality_count_distribution(df, save_path=None, ax=None):
+    if 'abnormality_count' not in df.columns:
+        return
+    sns.histplot(data=df, x='abnormality_count', hue='group', bins=15, multiple='dodge', shrink=0.8, kde=True, ax=ax, palette='Set2')
+    if ax is None:
+        plt.title('Distribution of Number of Chromosomal Abnormalities per Patient', fontsize=16)
+        plt.xlabel('Number of Abnormalities', fontsize=14)
+        plt.ylabel('Count', fontsize=14)
+        plt.legend(title='Group')
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.close()
+    else:
+        ax.set_title('Abnormality Count Distribution')
+        ax.set_xlabel('Number of Abnormalities')
+        ax.set_ylabel('Count')
+        ax.grid(axis='y', linestyle='--', alpha=0.7)
+
+# Update summary visualization (remove karyotype, add mutation burden)
+from matplotlib.gridspec import GridSpec
+plt.figure(figsize=(20, 14))
 gs = GridSpec(2, 2)
 
 ax1 = plt.subplot(gs[0, 0])
-sns.countplot(x='group', data=df, ax=ax1)
-ax1.set_title('Group Distribution')
-ax1.set_xlabel('Group')
-ax1.set_ylabel('Count')
+plot_group_distribution(df, ax=ax1)
 
 ax2 = plt.subplot(gs[0, 1])
-sns.boxplot(x='group', y='abnormality_count', data=df, ax=ax2)
-ax2.set_title('Abnormalities per Patient')
-ax2.set_xlabel('Group')
-ax2.set_ylabel('Number of Abnormalities')
-
-top5_healthy = healthy_percentages.nlargest(5)
-top5_leukemia = leukemia_percentages.nlargest(5)
+plot_abnormality_count_distribution(df, ax=ax2)
 
 ax3 = plt.subplot(gs[1, 0])
-sns.barplot(x=top5_healthy.values, y=top5_healthy.index, ax=ax3, color='#2ca02c')
-ax3.set_title('Top 5 Abnormalities in Healthy')
-ax3.set_xlabel('Percentage (%)')
+sns.histplot(df, x='mutation_burden', hue='group', bins=20, multiple='dodge', kde=True, palette='Set2', ax=ax3)
+ax3.set_title('Mutated Genes per Sample by Group')
+ax3.set_xlabel('Number of Mutated Genes')
+ax3.set_ylabel('Number of Samples')
 
 ax4 = plt.subplot(gs[1, 1])
-sns.barplot(x=top5_leukemia.values, y=top5_leukemia.index, ax=ax4, color='#d62728')
-ax4.set_title('Top 5 Abnormalities in Leukemia')
-ax4.set_xlabel('Percentage (%)')
+# Show top mutated genes for the largest group
+largest_group = df['group'].value_counts().idxmax()
+plot_top_mutated_genes(df, gene_cols, 'group', largest_group, '#d62728', ax=ax4, top_n=10)
 
-plt.tight_layout()
+plt.suptitle('Dataset Summary: Mutation Burden and Top Mutated Genes', fontsize=22, fontweight='bold', y=1.02)
+plt.tight_layout(rect=[0, 0, 1, 0.97])
 plt.savefig('visualizations/summary.png', dpi=300, bbox_inches='tight')
 plt.close()
 
-print("All visualizations have been saved to the 'visualizations' directory.")
+print("All visualizations have been updated for Masked Somatic Mutation data. Karyotype plot removed!")
+
+# --- USE gene_alt_df FOR ALL GENE-LEVEL VISUALIZATIONS ---
+if gene_alt_df is not None:
+    # Top mutated genes per group (by t_alt + n_alt)
+    for group, color in zip(gene_alt_df['group'].unique(), ['#d62728', '#1f77b4', '#2ca02c', '#ff7f0e']):
+        group_df = gene_alt_df[gene_alt_df['group'] == group]
+        gene_sums = group_df.drop(columns='group').sum().sort_values(ascending=False)
+        top_genes = gene_sums.head(15)
+        plt.figure(figsize=(14, 6))
+        sns.barplot(x=top_genes.values, y=top_genes.index, color=color)
+        plt.title(f'Top 15 Genes by (t_alt + n_alt) in {group}', fontsize=16)
+        plt.xlabel('Total (t_alt + n_alt)')
+        plt.ylabel('Gene')
+        plt.tight_layout()
+        plt.savefig(f'visualizations/top_abnormalities_{group.replace(" ", "_")}_alt.png', dpi=300, bbox_inches='tight')
+        plt.close()
+    # Correlation heatmap
+    gene_corr = gene_alt_df.drop(columns='group').corr()
+    plt.figure(figsize=(16, 14))
+    mask = np.triu(np.ones_like(gene_corr, dtype=bool))
+    sns.heatmap(gene_corr, mask=mask, cmap='coolwarm', vmin=-1, vmax=1,
+                annot=False, square=True, linewidths=0.5, cbar_kws={'label': 'Correlation Coefficient'})
+    plt.title('Correlation Between Genes (t_alt + n_alt)', fontsize=18)
+    plt.tight_layout()
+    plt.savefig('visualizations/correlation_heatmap_genes_alt.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    # Mutation burden per sample
+    df['mutation_burden'] = gene_alt_df.drop(columns='group').sum(axis=1)
+    plt.figure(figsize=(12, 7))
+    sns.histplot(data=df, x='mutation_burden', hue='group', bins=15, multiple='dodge', kde=False, palette='Set2')
+    plt.title('Distribution of (t_alt + n_alt) per Patient', fontsize=16)
+    plt.xlabel('Total (t_alt + n_alt)')
+    plt.ylabel('Count')
+    plt.legend(title='Group')
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.savefig('visualizations/abnormality_count_distribution_genes_alt.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    # Top mutated genes overall
+    gene_sums = gene_alt_df.drop(columns='group').sum().sort_values(ascending=False)
+    top_genes_total = gene_sums.head(10)
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x=top_genes_total.values, y=top_genes_total.index, color='#1f77b4')
+    plt.title('Top 10 Mutated Genes (t_alt + n_alt)', fontsize=16)
+    plt.xlabel('Total (t_alt + n_alt)')
+    plt.ylabel('Gene')
+    plt.tight_layout()
+    plt.savefig('visualizations/top10_genes_by_total_alt.png', dpi=300, bbox_inches='tight')
+    plt.close()
