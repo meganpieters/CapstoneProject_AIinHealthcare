@@ -12,6 +12,8 @@ def collect_maf_files(data_dir="data", extension=".maf.gz"):
                 files.append((os.path.join(root, fn), Path(root).name))
     return files
 
+# TODO: VAF calculation, feature selection
+
 def build_long_df(files, genes):
     recs = []
     for fp, case in tqdm(files):
