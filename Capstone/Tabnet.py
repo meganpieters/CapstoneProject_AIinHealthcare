@@ -31,15 +31,16 @@ def load_and_prepare_data():
 
     y = mutation_data['disease_name'].astype('category')
     le = LabelEncoder()
-    y = le.fit_transform(y)
+    y_encoded = le.fit_transform(y)
+    class_labels = le.classes_
 
     original_feature_names = X.columns.tolist()
 
     selector = SelectKBest(score_func=f_classif, k=2000)
-    X_new = selector.fit_transform(X, y)
+    X_new = selector.fit_transform(X, y_encoded)
     selected_feature_names = [original_feature_names[i] for i in selector.get_support(indices=True)]
 
-    return X_new, y, selected_feature_names
+    return X_new, y_encoded, selected_feature_names, class_labels
 
 def train_model(X, y, feature_names, k=25):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=48)
@@ -77,54 +78,72 @@ def train_model(X, y, feature_names, k=25):
         drop_last=False,
         weights=sample_weights
     )
+    return {
+        "model": clf,
+        "X_test_selected": X_test,
+        "y_test": y_test,
+        "selected_feature_names": feature_names,
+        "grid_search": None
+    }
 
-    y_pred = clf.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    print(f"Test accuracy: {acc:.3f}")
+def print_metrics(model, X_test_selected, y_test, grid_search):
+    y_pred = model.predict(X_test_selected)
+    print("Accuracy:", accuracy_score(y_test, y_pred))
+    print("\nClassification Report:\n", classification_report(y_test, y_pred))
 
-    y_pred = clf.predict(X_test)
-    ConfusionMatrixDisplay.from_predictions(y_test, y_pred).plot()
+def plot_confusion_matrix(model, X_test_selected, y_test, class_labels, outdir="visualizations"):
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+    y_pred = model.predict(X_test_selected)
+    plt.figure(figsize=(6, 5))
+    ConfusionMatrixDisplay.from_predictions(
+        y_test, y_pred,
+        display_labels=class_labels,
+        cmap='Blues'
+    )
     plt.title("Confusion Matrix - TabNet")
-    plt.savefig("visualizations/tabnet_confusion_matrix.png")
-
-    feat_importances = clf.feature_importances_
-    feat_df = pd.DataFrame({'feature': feature_names, 'importance': feat_importances})
-    feat_df = feat_df.sort_values(by='importance', ascending=False)
-
-    plt.figure(figsize=(10, 8))
-    sns.barplot(x='importance', y='feature', data=feat_df.head(20))
-    plt.title('Tabnet: Top 20 Important Features')
-    plt.xlabel('Belang')
-    plt.ylabel('Feature')
-    plt.tight_layout()
-    plt.savefig('visualizations/tabnet_feature_importance_top20.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f"{outdir}/tabnet_confusion_matrix.png", dpi=300, bbox_inches='tight')
     plt.close()
-    y_proba = clf.predict_proba(X_test)
-    n_classes = y_proba.shape[1]
 
-    fpr = dict()
-    tpr = dict()
-    roc_auc = dict()
-
-    for i in range(n_classes):
-        fpr[i], tpr[i], _ = roc_curve((y_test == i).astype(int), y_proba[:, i])
-        roc_auc[i] = roc_auc_score((y_test == i).astype(int), y_proba[:, i])
-
-    plt.figure(figsize=(10, 8))
-    for i in range(min(n_classes, 5)):
-        plt.plot(fpr[i], tpr[i], label=f"Class {i} (AUC = {roc_auc[i]:.2f})")
-    plt.plot([0, 1], [0, 1], 'k--', label='Random chance')
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title(f"Multiclass ROC Curve - TabNet (Accuracy: {acc:.2f})")
-    plt.legend(loc='lower right')
+def plot_feature_importance(model, feature_names, outdir="visualizations", top_n=15):
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+    importances = model.feature_importances_
+    feat_imp = pd.Series(importances, index=feature_names).sort_values(ascending=False)
+    print("\nTop features:")
+    print(feat_imp.head(10))
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x=feat_imp.head(top_n).values, y=feat_imp.head(top_n).index, palette='plasma')
+    plt.title(f"Top {top_n} Feature Importances - TabNet")
+    plt.xlabel("Importance Score")
+    plt.ylabel("Feature")
     plt.tight_layout()
-    plt.savefig("visualizations/tabnet_roc_curve.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"{outdir}/tabnet_feature_importance_top20.png", dpi=300)
     plt.close()
 
 
+def plot_roc_curve(model, X_test_selected, y_test, class_labels, outdir="visualizations"):
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+    if len(class_labels) == 2:
+        y_prob = model.predict_proba(X_test_selected)[:, 1]
+        fpr, tpr, _ = roc_curve(y_test, y_prob)
+        auc_score = roc_auc_score(y_test, y_prob)
+        plt.figure(figsize=(8, 6))
+        plt.plot(fpr, tpr, label=f"ROC Curve (AUC = {auc_score:.2f})", color='darkorange')
+        plt.plot([0, 1], [0, 1], linestyle='--', color='gray')
+        plt.title("ROC Curve - TabNet")
+        plt.xlabel("False Positive Rate")
+        plt.ylabel("True Positive Rate")
+        plt.legend()
+        plt.grid(alpha=0.3)
+        plt.savefig(f"{outdir}/tabnet_roc_curve.png", dpi=300)
+        plt.close()
 
 if __name__ == "__main__":
-    X, y, names = load_and_prepare_data()
-    model_info = train_model(X, y, names)
-
+    X, y, feature_names, class_labels = load_and_prepare_data()
+    model_info = train_model(X, y, feature_names)
+    print_metrics(model_info["model"], model_info["X_test_selected"], model_info["y_test"], model_info["grid_search"])
+    plot_confusion_matrix(model_info["model"], model_info["X_test_selected"], model_info["y_test"], class_labels)
+    plot_feature_importance(model_info["model"], model_info["selected_feature_names"])
+    plot_roc_curve(model_info["model"], model_info["X_test_selected"], model_info["y_test"], class_labels)
