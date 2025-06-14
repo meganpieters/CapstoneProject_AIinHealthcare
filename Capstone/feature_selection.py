@@ -38,42 +38,28 @@ def main():
     disease_data = load_disease_data()
     files = collect_maf_files()
 
-    # Print current GENES list
-    print("\nCurrent GENES list:")
-    print("GENES = [" + ", ".join(f'\"{g}\"' for g in GENES) + "]")
-
-    # Print combined gene list (union of current GENES and top 400 selected genes)
-    best_n = 400
-    best_genes = set(select_important_genes_feature_matrix(mutation_data_full, disease_data, gene_prefix='t_alt_', top_n=best_n, verbose=False))
-    combined_genes = sorted(set(GENES) | best_genes)
-    print(f"\nCombined gene list (current GENES + top {best_n} selected genes):")
-    print("GENES = [" + ", ".join(f'\"{g}\"' for g in combined_genes) + "]")
-    return
     ns = [10, 50, 100, 200, 500]
     results = []
 
     for top_n in ns:
         print(f"\n=== Feature selection: top {top_n} genes ===")
         selected_genes = select_important_genes_feature_matrix(mutation_data_full, disease_data, gene_prefix='t_alt_', top_n=top_n, verbose=True)
-        # Build long_df and feature matrix for these genes
         long_df = build_long_df(files, selected_genes)
         mutation_data = make_feature_matrix(long_df, selected_genes)
-        mutation_data = mutation_data.reset_index()  # Ensure 'case' is a column
-        # Prepare data for modeling
+        mutation_data = mutation_data.reset_index()
+
         X, y, class_labels = load_and_prepare_data(mutation_data, disease_data)
         model_info = train_model(X, y)
-        # Get metrics
+
         print_metrics(model_info["model"], model_info["X_test_selected"], model_info["y_test"], model_info["grid_search"], return_dict=True)
         n_cases = len(mutation_data)
         print(f"Cases with feature selection: {n_cases} - total cases: {len(mutation_data_full)}")
-        # Store results
         results.append({
             'top_n': top_n,
             'n_cases': n_cases,
             **model_info
         })
 
-    # Print summary table
     print("\n=== Summary ===")
     summary_df = pd.DataFrame(results)
     print(summary_df.to_string(index=False))
