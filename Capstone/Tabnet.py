@@ -35,7 +35,6 @@ def load_and_prepare_data():
 
     original_feature_names = X.columns.tolist()
 
-    # ⬇️ Pas selectie toe
     selector = SelectKBest(score_func=f_classif, k=2000)
     X_new = selector.fit_transform(X, y)
     selected_feature_names = [original_feature_names[i] for i in selector.get_support(indices=True)]
@@ -43,11 +42,9 @@ def load_and_prepare_data():
     return X_new, y, selected_feature_names
 
 def train_model(X, y, feature_names, k=25):
-    # Split data
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=48)
 
     sample_weights = compute_sample_weight(class_weight='balanced', y=y_train)
-    # Converteer expliciet naar NumPy arrays
     X_train = np.array(X_train)
     X_test = np.array(X_test)
     y_train = np.array(y_train)
@@ -94,7 +91,6 @@ def train_model(X, y, feature_names, k=25):
     feat_df = pd.DataFrame({'feature': feature_names, 'importance': feat_importances})
     feat_df = feat_df.sort_values(by='importance', ascending=False)
 
-    # Plot top 20 belangrijke features
     plt.figure(figsize=(10, 8))
     sns.barplot(x='importance', y='feature', data=feat_df.head(20))
     plt.title('Tabnet: Top 20 Important Features')
@@ -103,8 +99,32 @@ def train_model(X, y, feature_names, k=25):
     plt.tight_layout()
     plt.savefig('visualizations/tabnet_feature_importance_top20.png', dpi=300, bbox_inches='tight')
     plt.close()
+    y_proba = clf.predict_proba(X_test)
+    n_classes = y_proba.shape[1]
+
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+
+    for i in range(n_classes):
+        fpr[i], tpr[i], _ = roc_curve((y_test == i).astype(int), y_proba[:, i])
+        roc_auc[i] = roc_auc_score((y_test == i).astype(int), y_proba[:, i])
+
+    plt.figure(figsize=(10, 8))
+    for i in range(min(n_classes, 5)):
+        plt.plot(fpr[i], tpr[i], label=f"Class {i} (AUC = {roc_auc[i]:.2f})")
+    plt.plot([0, 1], [0, 1], 'k--', label='Random chance')
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title(f"Multiclass ROC Curve - TabNet (Accuracy: {acc:.2f})")
+    plt.legend(loc='lower right')
+    plt.tight_layout()
+    plt.savefig("visualizations/tabnet_roc_curve.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
 
 
 if __name__ == "__main__":
     X, y, names = load_and_prepare_data()
     model_info = train_model(X, y, names)
+
