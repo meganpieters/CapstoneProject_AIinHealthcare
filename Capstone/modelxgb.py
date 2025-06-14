@@ -11,10 +11,7 @@ from sklearn.metrics import classification_report, accuracy_score, ConfusionMatr
 from preprocess import load_mutation_data, load_disease_data
 
 
-def load_and_prepare_data():
-    mutation_data = load_mutation_data()
-    disease_data = load_disease_data()
-
+def load_and_prepare_data(mutation_data, disease_data):
     mutation_data['disease_name'] = mutation_data['case'].map(disease_data.set_index('case_id')['tumor_code'])
     mutation_data = mutation_data.dropna(subset=['disease_name'])
     mutation_data = mutation_data.drop(columns=['case'])
@@ -33,7 +30,7 @@ def train_model(X, y, k=25):
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.3, random_state=42, stratify=y
     )
-    xgb = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', random_state=42)
+    xgb = XGBClassifier(eval_metric='mlogloss', random_state=42)
     xgb.fit(X_train, y_train)
     return {
         "model": xgb,
@@ -47,10 +44,19 @@ def train_model(X, y, k=25):
     }
 
 
-def print_metrics(model, X_test_selected, y_test, grid_search):
+def print_metrics(model, X_test_selected, y_test, grid_search, return_dict=False):
     y_pred = model.predict(X_test_selected)
-    print("Accuracy:", accuracy_score(y_test, y_pred))
+    acc = accuracy_score(y_test, y_pred)
+    report = classification_report(y_test, y_pred, output_dict=True)
+    print("Accuracy:", acc)
     print("\nClassification Report:\n", classification_report(y_test, y_pred))
+    if return_dict:
+        return {
+            'accuracy': acc,
+            'precision': report['weighted avg']['precision'],
+            'recall': report['weighted avg']['recall'],
+            'f1': report['weighted avg']['f1-score']
+        }
 
 
 def plot_confusion_matrix(model, X_test_selected, y_test, class_labels, outdir="visualizations"):
@@ -104,7 +110,7 @@ def plot_roc_curve(model, X_test_selected, y_test, class_labels, outdir="visuali
 
 
 if __name__ == "__main__":
-    X, y, class_labels = load_and_prepare_data()
+    X, y, class_labels = load_and_prepare_data(load_mutation_data(), load_disease_data())
     model_info = train_model(X, y)
 
     print_metrics(model_info["model"], model_info["X_test_selected"], model_info["y_test"], model_info["grid_search"])

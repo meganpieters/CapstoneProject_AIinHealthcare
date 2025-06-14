@@ -2,7 +2,7 @@ import pandas as pd
 import os
 from tqdm import tqdm
 from pathlib import Path
-
+from genes import GENES
 
 def collect_maf_files(data_dir="data", extension=".maf.gz"):
     files = []
@@ -12,22 +12,20 @@ def collect_maf_files(data_dir="data", extension=".maf.gz"):
                 files.append((os.path.join(root, fn), Path(root).name))
     return files
 
-# TODO: VAF calculation, feature selection
-
 def build_long_df(files, genes):
     recs = []
     for fp, case in tqdm(files):
         df = pd.read_csv(fp, sep='\t', comment='#', compression='gzip',
                          usecols=['Hugo_Symbol','Variant_Classification',
-                                  't_alt_count','n_alt_count', 'Tumor_Sample_Barcode'])
+                                  't_alt_count','t_depth', 'Tumor_Sample_Barcode'])
         df = df[df.Hugo_Symbol.isin(genes)]
 
         if df.empty: continue
+        df['vaf'] = df['t_alt_count'] / df['t_depth']
         grp = df.groupby('Hugo_Symbol').agg(
             n_mut=('Hugo_Symbol','size'),
             t_alt=('t_alt_count','sum'),
-            n_alt=('n_alt_count','sum'),
-            # take the most severe variant per gene (optional)
+            mean_vaf=('vaf', 'mean'),
             worst_class=('Variant_Classification',
                          lambda x: x.mode().iat[0])
         ).reset_index()
@@ -53,7 +51,7 @@ def make_feature_matrix(long_df, genes):
     # Numeric features
     feat_counts = long_df.pivot(index='case',
                                 columns='Hugo_Symbol',
-                                values=['t_alt'])\
+                                values=['t_alt', 'mean_vaf'])\
                          .fillna(0)
 
     # Flatten MultiIndex columns
@@ -84,9 +82,7 @@ def load_disease_data():
 
 if __name__ == "__main__":
     files = collect_maf_files("data")
-    genes = get_all_genes(files) # TODO: Filter out genes that are not needed
-    print(f"Found {len(genes)} unique genes across all MAF files.")
-    print(f"Genes: {genes[:10]}...")
-    long_df = build_long_df(files, genes)
-    X = make_feature_matrix(long_df, genes)
-    X.to_csv("combined_mutation_matrix_test_2.csv")
+    long_df = build_long_df(files, GENES)
+    X = make_feature_matrix(long_df, GENES)
+    print(f"Feature matrix shape: {X.shape}")
+    X.to_csv("combined_mutation_matrix.csv")
