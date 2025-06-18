@@ -57,12 +57,12 @@ def train_model(X, y, k=25, use_bayesian=False):
             'reg_alpha': (0, 0.1),
             'reg_lambda': (1, 2)
         }
-        search = BayesSearchCV(xgb, search_spaces, cv=3, n_jobs=-1, scoring='accuracy', verbose=1, n_iter=20, random_state=42)
+        search = BayesSearchCV(xgb, search_spaces, cv=5, n_jobs=-1, scoring='accuracy', verbose=1, n_iter=20, random_state=42)
         search.fit(X_train, y_train)
         best_model = search.best_estimator_
         grid_search = search
     else:
-        grid_search = GridSearchCV(xgb, param_grid, cv=3, n_jobs=-1, scoring='accuracy', verbose=1)
+        grid_search = GridSearchCV(xgb, param_grid, cv=5, n_jobs=-1, scoring='accuracy', verbose=1)
         grid_search.fit(X_train, y_train)
         best_model = grid_search.best_estimator_
 
