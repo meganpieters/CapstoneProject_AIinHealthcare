@@ -174,4 +174,7 @@ cython_debug/
 .pypirc
 
 # Ignore raw data files, only commit processed data
-Capstone/data
+data
+
+.virtual_documents/
+anaconda_projects/
