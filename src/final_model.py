@@ -178,7 +178,7 @@ def plot_confusion_matrix(
 ):
     if not os.path.exists(outdir):
         os.makedirs(outdir)
-    short_labels = ['ALL', 'AML']
+    short_labels = ["ALL", "AML"]
     plt.figure(figsize=(6, 5))
     ConfusionMatrixDisplay.from_estimator(
         model, X_test_selected, y_test, display_labels=short_labels, cmap="Blues"
