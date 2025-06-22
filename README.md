@@ -51,7 +51,3 @@ This project analyzes gene mutation data for leukemia classification using machi
   ```sh
   pip install xgboost
   ```
-
-## Citation
-
-If you use this code, please cite appropriately.
